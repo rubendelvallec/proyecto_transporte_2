@@ -49,7 +49,9 @@ class Camion:
         tiempo = time.strftime("%d-%m-%Y %H:%M:%S") 
         temperatura = self.simular_temperatura()
         humedad = self.simular_humedad()
-        localizacion = self.simular_localizacion()
+        la, lo = self.simular_localizacion()
+        Adaptador = Localizacion(la, lo)
+        codigo_olc = Adaptador.gms_a_olc()
 
         if len(self.data['temperatura']) >= 12:
             del(self.data['temperatura'][0])
@@ -57,7 +59,7 @@ class Camion:
 
         self.data['temperatura'].append(temperatura) 
         self.data['humedad'].append(humedad) 
-        self.sistema.actualizacion(self, (tiempo, temperatura, humedad, localizacion))
+        self.sistema.actualizacion(self, (tiempo, temperatura, humedad, codigo_olc))
 
         self.comprobar_variacion = ComprobarVariacion()
         self.verificar_umbral = VerificarUmbralTemperatura(self.comprobar_variacion)
@@ -73,7 +75,11 @@ class Camion:
         return round((70 + (10 * random.random())), 2) #Valores de humedad en los que se maneja España
 
     def simular_localizacion(self):
-        return (random.uniform(3, 9), random.uniform(27, 43)) #Los valores de latitud en los que se maneja España
+        grados_lat, grados_lon = random.uniform(3, 9), random.uniform(27, 43)
+        minutos_lat, minutos_lon = random.uniform(0, 59), random.uniform(0, 59)
+        segundos_lat, segundos_lon = random.uniform(0, 59), random.uniform(0, 59)
+        direccion_lat, direccion_lon = random.choice(['S', 'W', 'E', 'N']), random.choice(['S', 'W', 'E', 'N'])
+        return (grados_lat, minutos_lat, segundos_lat, direccion_lat), (grados_lon, minutos_lon, segundos_lon, direccion_lon) #Los valores de latitud en los que se maneja España
 
     def fin_trayecto(self):
         if self.tiempo_trayecto == 0: #Si el tiempo se ha acabado el trayecto llega a su fin
@@ -101,7 +107,7 @@ class Estadistico(Handler):
 
         if len(camion.data['humedad']) > 1:
             hum_mean = functools.reduce(lambda x, y: x+y, camion.data['humedad']) / len(camion.data['humedad'])
-            hum_var= functools.reduce(lambda x, y: x + (y - temp_mean) ** 2, camion.data['humedad'], 0) / len(camion.data['humedad'])
+            hum_var= functools.reduce(lambda x, y: x + (y - hum_mean) ** 2, camion.data['humedad'], 0) / len(camion.data['humedad'])
         else:
             hum_mean = functools.reduce(lambda x, y: x+y, camion.data['humedad']) / len(camion.data['humedad'])
             hum_var = 0  # No hay suficiente datos para calcular la desviación estándar
@@ -123,16 +129,12 @@ class VerificarUmbralTemperatura(Handler):
 
 class ComprobarVariacion(Handler):
     async def handle_request(self, camion):
+        i = 0
         nuevos_datos_temp = camion.data['temperatura']
         nuevos_datos_hum = camion.data['humedad']
         if len(camion.data['temperatura']) >= 6:
             while len(nuevos_datos_temp) != 6:
-                i = 0
                 nuevos_datos_temp = camion.data['temperatura'][i:]
-                i+= 1
-        if len(camion.data['humedad']) >= 6:
-            while len(nuevos_datos_hum) != 6:
-                i = 0
                 nuevos_datos_hum = camion.data['humedad'][i:]
                 i+= 1
         datos1 = nuevos_datos_temp[0]
@@ -161,31 +163,39 @@ class Variacion(Calculo):
     async def hacer_calculo(self, datos1, datos2):
         variacion = abs(datos1 - datos2)
         return variacion
+
 class Localizacion:
-    def _init_(self, longitud, latitud):
+    def __init__(self, latitud, longitud):
         self.longitud = longitud
         self.latitud = latitud
+    
+    def gms_a_decimal(self, grados, minutos, segundos, direccion):
 
-    def convertir_a_olc(self):
+        decimal = grados + minutos / 60 + segundos / 3600
+        if direccion in ['S', 'W']:
+            decimal *= -1
+        return decimal
+
+
+    def gms_a_olc(self):
         # Convertir las coordenadas a código OLC
-        codigo_olc = olc.encode(self.latitud, self.longitud)
-        return codigo_olc
+        lat_decimal = self.gms_a_decimal(self.latitud[0], self.latitud[1], self.latitud[2], self.latitud[3])
+        lon_decimal = self.gms_a_decimal(self.longitud[0], self.longitud[1], self.longitud[2], self.longitud[3])
+        return olc.encode(lat_decimal, lon_decimal)
+
 
 async def main():
     sistema1 = Sistema.get_instance("amazon")
     camion1 = Camion(1, sistema1, 500)
     camion2 = Camion(2, sistema1, 700)
 
-    while True:
-        if camion1.fin_trayecto() == False and camion2.fin_trayecto() == False:
+    while not (camion1.fin_trayecto() and camion2.fin_trayecto()):
+        if camion1.fin_trayecto() == False:
             await camion1.actualizar_datos()
+        if camion2.fin_trayecto() == False:
             await camion2.actualizar_datos()
-        elif camion1.fin_trayecto() == True and camion2.fin_trayecto() == False:
-            await camion2.actualizar_datos()
-        elif camion2.fin_trayecto() == True and camion1.fin_trayecto() == False:
-            await camion1.actualizar_datos()
-        else:
-            return False
+    
+    print("Ambos camiones han terminado su trayecto.")
 
 if __name__ == "__main__":
     asyncio.run(main())
