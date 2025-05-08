@@ -7,11 +7,11 @@ from abc import ABC, abstractmethod
 import functools
 from openlocationcode import openlocationcode as olc
 
-#R1
-class Sistema:
+#R1 Patron singleton
+class Sistema: #Clase encargada de manejar tod el sistema de actualizaciones
     _instance = None
 
-    def __init__(self, nombre):
+    def __init__(self, nombre:str):
         if Sistema._instance is not None:
             raise Exception("¡Esta clase es un Singleton! Utilice 'get_instance()' para obtener la instancia.")
         
@@ -28,12 +28,15 @@ class Sistema:
     def agregar_camion(self, camion):
         self.camiones.append(camion)
 
-#R2
-    def actualizacion(self, camion, tupla):
+#R2 Observer
+    def actualizacion(self, camion, tupla): #Con los datos recibidos, realiza las operaciones pertinentes.
+        camion.comprobar_variacion = ComprobarVariacion()
+        camion.verificar_umbral = VerificarUmbralTemperatura(camion.comprobar_variacion)
+        camion.calcular_estadisticos = Estadistico(camion.verificar_umbral)
         print(f"El camión {camion.numero} actualizó sus datos {tupla}")
 
 class Camion:
-    def __init__(self, numero, sistema, km):
+    def __init__(self, numero:int, sistema:Sistema, km:int):
         self.numero = numero
         self.sistema = sistema
         self.tiempo_trayecto = km/100 #Asumimos que el camion va a una velocidad media de 100 km/h y pasamos la distancia a horas
@@ -43,7 +46,7 @@ class Camion:
         self.verificar_umbral = None
         self.comprobar_variacion = None
     
-    async def actualizar_datos(self):
+    async def actualizar_datos(self): #Camion avisa al sistema de sus actualizaciones.
         self.tiempo_trayecto -= 1 #Asumimos que los cinco segundos que tardan en actualizar los datos son 1 hora y eliminamos una hora de trayecto
         time = datetime.datetime.now()
         tiempo = time.strftime("%d-%m-%Y %H:%M:%S") 
@@ -53,17 +56,14 @@ class Camion:
         Adaptador = Localizacion(la, lo)
         codigo_olc = Adaptador.gms_a_olc()
 
-        if len(self.data['temperatura']) >= 12:
-            del(self.data['temperatura'][0])
+        if len(self.data['temperatura']) >= 12: #La lista se actualiza cada 5 segundos, es decir que cuando se ha actualizado 12 veces quiere decir que ya han pasado 60 segundos.
+            del(self.data['temperatura'][0]) #Elimino el primer valor para que solo almacene los de los ultimos 60 segundos
             del(self.data['humedad'][0])
 
         self.data['temperatura'].append(temperatura) 
         self.data['humedad'].append(humedad) 
         self.sistema.actualizacion(self, (tiempo, temperatura, humedad, codigo_olc))
 
-        self.comprobar_variacion = ComprobarVariacion()
-        self.verificar_umbral = VerificarUmbralTemperatura(self.comprobar_variacion)
-        self.calcular_estadisticos = Estadistico(self.verificar_umbral)
 
         await self.calcular_estadisticos.handle_request(self)
         await asyncio.sleep(5)
@@ -119,7 +119,7 @@ class Estadistico(Handler):
 class VerificarUmbralTemperatura(Handler):
     
     async def handle_request(self, camion):
-        if camion.data['temperatura'][-1] > 27:
+        if camion.data['temperatura'][-1] > 27: #27 es el umbral que hemos escogido
             print(f"Advertencia: Temperatura actual ({camion.data['temperatura'][-1]}°C) está por encima del umbral.")
         else:
             print(f"Temperatura actual ({camion.data['temperatura'][-1]}°C) está dentro del umbral.")
@@ -132,9 +132,9 @@ class ComprobarVariacion(Handler):
         i = 0
         nuevos_datos_temp = camion.data['temperatura']
         nuevos_datos_hum = camion.data['humedad']
-        if len(camion.data['temperatura']) >= 6:
+        if len(camion.data['temperatura']) >= 6: #Pasa lo mismo que en el caso anterior pero esta vez con 30 segundos, es decir se actualiza 6 veces
             while len(nuevos_datos_temp) != 6:
-                nuevos_datos_temp = camion.data['temperatura'][i:]
+                nuevos_datos_temp = camion.data['temperatura'][i:] #Va probando valores desde el primero hasta el final hasta que la lista solo haya recogido la informacion de los ultimos 30 segundos
                 nuevos_datos_hum = camion.data['humedad'][i:]
                 i+= 1
         datos1 = nuevos_datos_temp[0]
@@ -144,7 +144,7 @@ class ComprobarVariacion(Handler):
         variacion_temp = Variacion()
         variacion_hum = Variacion()
         
-        variacion_temp, variacion_hum = await asyncio.gather(
+        variacion_temp, variacion_hum = await asyncio.gather( #Con esto lanzamos las dos operaciones concurrentemente
             variacion_temp.hacer_calculo(datos1, datos2),
             variacion_hum.hacer_calculo(datos3, datos4)
         )
@@ -154,7 +154,7 @@ class ComprobarVariacion(Handler):
             
         if variacion_hum > 2:
             print(f"Advertencia: Variación de humedad mayor a 2%")
-#R4
+#R4 Strategy
 class Calculo:
     def hacer_calculo(self, datos1, datos2):
         pass
@@ -163,7 +163,7 @@ class Variacion(Calculo):
     async def hacer_calculo(self, datos1, datos2):
         variacion = abs(datos1 - datos2)
         return variacion
-
+#R5 Adapter
 class Localizacion:
     def __init__(self, latitud, longitud):
         self.longitud = longitud
@@ -184,7 +184,7 @@ class Localizacion:
         return olc.encode(lat_decimal, lon_decimal)
 
 
-async def main():
+async def main(): #Creo la funcion main() para probar el codigo
     sistema1 = Sistema.get_instance("amazon")
     camion1 = Camion(1, sistema1, 500)
     camion2 = Camion(2, sistema1, 700)
